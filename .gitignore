@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+ev_therm_results.csv
+ev_therm_settings.json

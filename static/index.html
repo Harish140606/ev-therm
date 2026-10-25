@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EV-Therm</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/vendor/plotly.min.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="3" y="8" width="23" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="26" y="13" width="3" height="6" rx="1" fill="currentColor"/>
+      <path d="M16 10 L11 17 H15 L13 22 L19 14 H15 Z" fill="currentColor"/>
+    </svg>
+    <div>
+      <h1>EV-Therm</h1>
+      <p>EV Battery Thermal Control Simulator · PID vs MPC</p>
+    </div>
+  </div>
+  <span class="badge">Software simulation · no hardware</span>
+</header>
+
+<div class="layout">
+  <aside class="panel">
+    <form id="settings" autocomplete="off"></form>
+    <div class="run-bar">
+      <button id="run" class="btn-primary" type="button">
+        <span class="run-label">Run PID &amp; MPC</span>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
+      <p id="run-status" class="muted small"></p>
+    </div>
+  </aside>
+
+  <main>
+    <section id="intro" class="card intro">
+      <h2>Keeping a battery cool without wasting energy</h2>
+      <p>Current flowing through a battery's internal resistance produces heat. The cooler must hold the
+        battery near a target temperature, but running it hard costs electrical energy. This simulator runs
+        two controllers on the <b>same simulated battery</b>, with the same load and starting temperature.</p>
+      <div class="two">
+        <div class="ctrl-card pid">
+          <h3>PID</h3>
+          <p>Reacts to the present error <i>e = T − T<sub>target</sub></i>: proportional to how hot it is,
+            integral of past error, derivative of how fast it is changing.</p>
+        </div>
+        <div class="ctrl-card mpc">
+          <h3>MPC</h3>
+          <p>At every step it predicts the temperature over a short horizon with the battery model, solves an
+            optimisation (SciPy SLSQP) for the best cooling plan, applies the first move, and repeats.</p>
+        </div>
+      </div>
+      <p class="muted">Set parameters on the left and press <b>Run</b>. No results are shown until a simulation has run.</p>
+    </section>
+
+    <div id="error" class="banner error" hidden></div>
+
+    <section id="results" hidden>
+      <div id="warnings"></div>
+      <div id="stale" class="banner info" hidden>Settings changed since the last run — press Run to update.</div>
+
+      <div id="kpis" class="kpis"></div>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Control loop in action</h2>
+          <div class="legend-temp"><span class="sw cool"></span>cool <span class="sw ok"></span>at target <span class="sw hot"></span>at limit</div>
+        </div>
+        <div class="transport">
+          <button id="play" class="btn-icon" type="button" aria-label="Play">
+            <svg viewBox="0 0 24 24"><path id="play-icon" d="M8 5v14l11-7z"/></svg>
+          </button>
+          <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Time step">
+          <span id="clock" class="clock">t = 0 s</span>
+          <select id="speed" aria-label="Playback speed">
+            <option value="10">0.5×</option><option value="20" selected>1×</option>
+            <option value="40">2×</option><option value="80">4×</option>
+          </select>
+        </div>
+        <div class="loops">
+          <div class="loop-box"><div id="loop-PID"></div></div>
+          <div class="loop-box"><div id="loop-MPC"></div></div>
+        </div>
+        <div id="chart-horizon" class="chart"></div>
+        <p class="muted small">Dotted line: what MPC <i>predicts</i> using its model and a constant-load forecast.
+          Purple steps: its planned commands. Only the first command is applied; the plan is recomputed every step
+          (receding horizon). MPC never sees future actual temperatures.</p>
+      </section>
+
+      <section class="card">
+        <h2>Results</h2>
+        <div id="chart-temp" class="chart tall"></div>
+        <div class="grid2">
+          <div id="chart-u" class="chart"></div>
+          <div id="chart-power" class="chart"></div>
+          <div id="chart-heat" class="chart"></div>
+          <div id="chart-energy" class="chart"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Performance metrics</h2>
+          <div class="actions">
+            <button id="dl-csv" class="btn" type="button">Download CSV</button>
+            <button id="dl-json" class="btn" type="button">Download settings</button>
+          </div>
+        </div>
+        <table id="metrics" class="metrics"></table>
+        <ul id="notes" class="notes"></ul>
+        <p class="muted small">No winner is declared: which controller is better depends on how you weigh
+          temperature tracking against cooling energy.</p>
+      </section>
+    </section>
+
+    <details class="card theory">
+      <summary><h2>Mathematical model &amp; explanation</h2></summary>
+      <div class="theory-grid">
+        <div>
+          <h3>Thermal model (single node)</h3>
+          <div class="eq">C · dT/dt = Q<sub>gen</sub> − Q<sub>cool</sub></div>
+          <div class="eq">Q<sub>gen</sub> = I² R<sub>int</sub> &nbsp;&nbsp; Q<sub>cool</sub> = K<sub>cool</sub> · u · (T − T<sub>a</sub>), &nbsp; 0 ≤ u ≤ 1</div>
+          <div class="eq">T<sub>k+1</sub> = T<sub>k</sub> + (Δt / C) · (Q<sub>gen,k</sub> − Q<sub>cool,k</sub>)</div>
+          <p>Forward Euler, stable when Δt·K<sub>cool</sub>/C &lt; 1 (checked before each run). Hottest steady
+            state at full cooling: T = T<sub>a</sub> + Q<sub>gen</sub>/K<sub>cool</sub>. If that is above the
+            target, no controller can reach it.</p>
+        </div>
+        <div>
+          <h3>PID</h3>
+          <div class="eq">u = clip(K<sub>p</sub>e + K<sub>i</sub>Σe·Δt + K<sub>d</sub>(e<sub>k</sub> − e<sub>k−1</sub>)/Δt, 0, 1)</div>
+          <p>e = T − T<sub>target</sub>; positive error means too hot, so more cooling. Anti-windup freezes the
+            integral while the output is saturated. Derivative is zero on the first sample.</p>
+        </div>
+        <div>
+          <h3>MPC</h3>
+          <div class="eq">min Σ<sub>k=0..N−1</sub> q<sub>T</sub>(T̂<sub>k+1</sub> − T<sub>target</sub>)² + r<sub>u</sub>u<sub>k</sub>² + r<sub>du</sub>(u<sub>k</sub> − u<sub>k−1</sub>)²</div>
+          <div class="eq">s.t. 0 ≤ u<sub>k</sub> ≤ 1, &nbsp; |u<sub>k</sub> − u<sub>k−1</sub>| ≤ Δu<sub>max</sub></div>
+          <p>T̂ is predicted with the same model; future current is forecast as the present current held constant.
+            Only u<sub>0</sub> is applied; the shifted plan warm-starts the next solve. If SLSQP fails, the
+            previous command is held and the failure is reported.</p>
+        </div>
+        <div>
+          <h3>Energy &amp; metrics</h3>
+          <div class="eq">P<sub>cool</sub> = P<sub>max</sub> u³ &nbsp;&nbsp; E = ΣP<sub>cool</sub>Δt [J] &nbsp;&nbsp; E<sub>Wh</sub> = E / 3600</div>
+          <p>The cubic law is an assumption (fan/pump affinity law). Heat removed (thermal) and electrical energy
+            are different quantities. Metrics: peak T, MAE, RMSE, cooling energy, max u, time above limit, time at
+            full cooling while above target.</p>
+        </div>
+        <div class="span2">
+          <h3>Assumptions &amp; limitations</h3>
+          <p>One lumped temperature (no cell-to-cell gradients); constant R<sub>int</sub>; simplified cooling to
+            ambient; illustrative parameters, not a specific commercial pack; no sensor noise; MPC's model equals
+            the plant; PID has no slew limit while MPC has Δu<sub>max</sub>.</p>
+        </div>
+      </div>
+    </details>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
